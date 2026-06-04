@@ -1,0 +1,11 @@
+fastapi>=0.100.0
+uvicorn>=0.22.0
+streamlit>=1.24.0
+ultralytics>=8.0.124
+opencv-python-headless>=4.8.0.74
+pandas>=2.0.0
+plotly>=5.15.0
+requests>=2.31.0
+pydantic>=2.0
+python-multipart>=0.0.6
+numpy>=1.24.0
