@@ -18,6 +18,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Automatically initialize/seed database if running standalone (without FastAPI startup)
+try:
+    from backend import database
+    database.seed_data_from_datasets()
+except Exception as e:
+    print("Auto-seeding skipped or failed:", e)
+
+
 # Constants
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
@@ -120,18 +128,47 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Helper function to fetch data from backend
-def fetch_from_api(endpoint):
+# Helper function to fetch data from backend with direct database fallback for Streamlit Cloud
+def fetch_from_api(endpoint, params=None):
     try:
-        response = requests.get(f"{BACKEND_URL}/{endpoint}", timeout=5)
+        response = requests.get(f"{BACKEND_URL}/{endpoint}", params=params, timeout=2)
         if response.status_code == 200:
             return response.json()
-        else:
-            st.error(f"Backend error ({response.status_code}): {response.text}")
-    except requests.exceptions.RequestException as e:
-        # Fallback helper if server is offline or loading
-        return None
+    except requests.exceptions.RequestException:
+        pass
+        
+    # Fallback to direct SQLite querying if FastAPI is offline (e.g. on Streamlit Cloud)
+    try:
+        from backend import database
+        database.init_db()
+        
+        if endpoint == "store/summary":
+            return database.get_store_summary()
+        elif endpoint == "metrics/live":
+            return database.get_live_metrics()
+        elif endpoint == "events":
+            event_type = params.get("event_type") if params else None
+            camera_id = params.get("camera_id") if params else None
+            return database.get_events(event_type=event_type, camera_id=camera_id)
+        elif endpoint == "anomalies":
+            return database.get_anomalies()
+        elif endpoint == "store/videos":
+            import glob
+            video_files = []
+            extracted_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "extracted")
+            for filepath in glob.glob(os.path.join(extracted_dir, "**", "*.mp4"), recursive=True):
+                rel_path = os.path.relpath(filepath, extracted_dir)
+                video_files.append({
+                    "name": os.path.basename(filepath),
+                    "relative_path": rel_path.replace("\\", "/"),
+                    "absolute_path": filepath.replace("\\", "/")
+                })
+            return video_files
+    except Exception as e:
+        print(f"Fallback database query failed: {e}")
+        
     return None
+
 
 # Render sidebar
 with st.sidebar:
@@ -496,14 +533,7 @@ with tab_logs:
     if log_camera:
         params["camera_id"] = log_camera
         
-    try:
-        res = requests.get(f"{BACKEND_URL}/events", params=params, timeout=5)
-        if res.status_code == 200:
-            events_data = res.json()
-        else:
-            events_data = []
-    except Exception:
-        events_data = []
+    events_data = fetch_from_api("events", params=params) or []
         
     if events_data:
         # Construct DataFrame
@@ -527,11 +557,7 @@ with tab_anomalies:
     st.markdown("### Anomaly & Operational Incidents Monitor")
     st.write("Real-time list of Crowd Alerts and Loitering Alerts requiring store attention.")
     
-    try:
-        res = requests.get(f"{BACKEND_URL}/anomalies", timeout=5)
-        anomalies_data = res.json() if res.status_code == 200 else []
-    except Exception:
-        anomalies_data = []
+    anomalies_data = fetch_from_api("anomalies") or []
         
     if anomalies_data:
         for idx, anom in enumerate(anomalies_data):
@@ -575,17 +601,28 @@ with tab_ops:
                 else:
                     st.error(f"Reset failed: {res.text}")
             except Exception as e:
-                st.error(f"Request failed: {e}")
+                # Direct DB reset fallback for Streamlit Cloud
+                try:
+                    from backend import database
+                    conn = database.get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("DROP TABLE IF EXISTS events")
+                    cursor.execute("DROP TABLE IF EXISTS live_metrics")
+                    cursor.execute("DROP TABLE IF EXISTS pos_transactions")
+                    conn.commit()
+                    conn.close()
+                    database.seed_data_from_datasets()
+                    st.success("🎉 Database successfully cleared and re-seeded with initial datasets (local fallback)!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as db_err:
+                    st.error(f"Reset failed: {db_err}")
                 
     with col_status:
         st.markdown("#### Video Directories Check")
         st.write("Verifies pathing to CCTV video assets in data/extracted.")
         
-        try:
-            res = requests.get(f"{BACKEND_URL}/store/videos", timeout=5)
-            video_files = res.json() if res.status_code == 200 else []
-        except Exception:
-            video_files = []
+        video_files = fetch_from_api("store/videos") or []
             
         if video_files:
             st.success(f"Discovered {len(video_files)} video assets:")

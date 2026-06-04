@@ -1,0 +1,28 @@
+# Python Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Databases
+*.db
+*.db-journal
+*.sqlite3
+
+# Large Media & Datasets (Purplle Challenge data)
+data/*.zip
+data/extracted/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Streamlit configurations
+.streamlit/config.toml
+
+# OS Files
+.DS_Store
+Thumbs.db
