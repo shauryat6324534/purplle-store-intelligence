@@ -5,7 +5,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import time
 import os
-import cv2
 from datetime import datetime
 from PIL import Image
 import numpy as np
@@ -386,129 +385,152 @@ with tab_dashboard:
 # ----------------- TAB 2: LIVE CCTV VISION PROCESSING -----------------
 with tab_live_cv:
     st.markdown("### Live CCTV Computer Vision Engine")
-    st.write("Select an extracted CCTV feed, configure thresholds, and launch the YOLOv8 tracking engine in real-time.")
     
-    # 1. Control Panel
-    videos_list = fetch_from_api("store/videos")
-    
-    # Default list if API offline
-    if not videos_list:
-        videos_list = [
-            {"name": "CAM 3 - entry.mp4", "relative_path": "Store 1/CAM 3 - entry.mp4", "absolute_path": ""},
-            {"name": "CAM 2 - zone.mp4", "relative_path": "Store 1/CAM 2 - zone.mp4", "absolute_path": ""},
-            {"name": "CAM 1 - zone.mp4", "relative_path": "Store 1/CAM 1 - zone.mp4", "absolute_path": ""},
-            {"name": "entry 1.mp4", "relative_path": "Store 2/entry 1.mp4", "absolute_path": ""}
-        ]
+    # Check if OpenCV and YOLOv8 are available in this environment
+    try:
+        import cv2
+        from backend.processor import CCTVProcessor
+        has_vision = True
+    except ImportError:
+        has_vision = False
         
-    video_options = {v["relative_path"]: v for v in videos_list}
-    
-    col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns([2, 1, 1, 1])
-    with col_ctrl1:
-        selected_vid_rel = st.selectbox("Select CCTV Feed", list(video_options.keys()))
-    with col_ctrl2:
-        crowd_thresh = st.number_input("Crowd Alert Threshold", min_value=2, max_value=20, value=4)
-    with col_ctrl3:
-        loiter_thresh = st.number_input("Loitering Threshold (sec)", min_value=5, max_value=120, value=15)
-    with col_ctrl4:
-        frame_skip_input = st.slider("Frame Skip (Speeds up processing)", min_value=1, max_value=10, value=5)
+    if not has_vision:
+        st.warning("⚠️ **Live Vision Processing is disabled on Streamlit Cloud**")
+        st.info("""
+        The required computer vision libraries (**OpenCV** and **YOLOv8**) are not loaded in this cloud environment to keep deployment lightweight and fast.
         
-    st.write("")
-    
-    btn_start = st.button("🚀 Start YOLOv8 Vision Processing", type="primary")
-    
-    if btn_start:
-        vid_info = video_options[selected_vid_rel]
-        # Resolve absolute path
-        abs_path = vid_info.get("absolute_path")
-        if not abs_path or not os.path.exists(abs_path):
-            # Try building it
-            abs_path = os.path.join("data", "extracted", selected_vid_rel)
+        To run the live computer vision tracking:
+        1. Clone the repository locally.
+        2. Install requirements using `pip install -r requirements.txt` and install `ultralytics opencv-python-headless`.
+        3. Launch the local services using `python run.py`.
+        4. Open the dashboard locally and start processing the CCTV video files.
+        
+        *All other analytical dashboard tabs (occupancy traffic, sales revenue, events log, anomalies) remain fully functional using the SQLite database.*
+        """)
+    else:
+        st.write("Select an extracted CCTV feed, configure thresholds, and launch the YOLOv8 tracking engine in real-time.")
+        
+        # 1. Control Panel
+        videos_list = fetch_from_api("store/videos")
+        
+        # Default list if API offline
+        if not videos_list:
+            videos_list = [
+                {"name": "CAM 3 - entry.mp4", "relative_path": "Store 1/CAM 3 - entry.mp4", "absolute_path": ""},
+                {"name": "CAM 2 - zone.mp4", "relative_path": "Store 1/CAM 2 - zone.mp4", "absolute_path": ""},
+                {"name": "CAM 1 - zone.mp4", "relative_path": "Store 1/CAM 1 - zone.mp4", "absolute_path": ""},
+                {"name": "entry 1.mp4", "relative_path": "Store 2/entry 1.mp4", "absolute_path": ""}
+            ]
             
-        if not os.path.exists(abs_path):
-            st.error(f"Could not find video file at {abs_path}. Please check data directory extraction.")
-        else:
-            # We run YOLOv8 on this file and stream it using st.image
-            camera_name = os.path.splitext(os.path.basename(abs_path))[0]
+        video_options = {v["relative_path"]: v for v in videos_list}
+        
+        col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns([2, 1, 1, 1])
+        with col_ctrl1:
+            selected_vid_rel = st.selectbox("Select CCTV Feed", list(video_options.keys()))
+        with col_ctrl2:
+            crowd_thresh = st.number_input("Crowd Alert Threshold", min_value=2, max_value=20, value=4)
+        with col_ctrl3:
+            loiter_thresh = st.number_input("Loitering Threshold (sec)", min_value=5, max_value=120, value=15)
+        with col_ctrl4:
+            frame_skip_input = st.slider("Frame Skip (Speeds up processing)", min_value=1, max_value=10, value=5)
             
-            st.write(f"Initializing YOLOv8 tracking for Camera: **{camera_name}**...")
-            
-            # Setup layout columns
-            col_feed, col_logs = st.columns([3, 2])
-            
-            with col_feed:
-                st.markdown("##### Live Feed Monitor")
-                feed_placeholder = st.empty()
-                live_stats_placeholder = st.empty()
+        st.write("")
+        
+        btn_start = st.button("🚀 Start YOLOv8 Vision Processing", type="primary")
+        
+        if btn_start:
+            vid_info = video_options[selected_vid_rel]
+            # Resolve absolute path
+            abs_path = vid_info.get("absolute_path")
+            if not abs_path or not os.path.exists(abs_path):
+                # Try building it
+                abs_path = os.path.join("data", "extracted", selected_vid_rel)
                 
-            with col_logs:
-                st.markdown("##### Real-Time Vision Events Log")
-                events_list_placeholder = st.empty()
+            if not os.path.exists(abs_path):
+                st.error(f"Could not find video file at {abs_path}. Please check data directory extraction.")
+            else:
+                # We run YOLOv8 on this file and stream it using st.image
+                camera_name = os.path.splitext(os.path.basename(abs_path))[0]
                 
-            # Import backend class inside the block to avoid loading YOLO model globally on app load
-            # which would slow down Streamlit start.
-            from backend.processor import CCTVProcessor
-            
-            processor = CCTVProcessor(
-                video_path=abs_path,
-                camera_id=camera_name,
-                crowd_threshold=crowd_thresh,
-                loitering_threshold_sec=float(loiter_thresh)
-            )
-            
-            # Run generator loop
-            events_log = []
-            
-            generator = processor.process_video_generator(frame_skip=frame_skip_input, max_duration_sec=90.0)
-            
-            for frame_bytes, person_count, new_events in generator:
-                # 1. Update Video Frame
-                feed_placeholder.image(frame_bytes, channels="BGR", use_container_width=True)
+                st.write(f"Initializing YOLOv8 tracking for Camera: **{camera_name}**...")
                 
-                # 2. Update stats
-                live_stats_placeholder.markdown(f"""
-                **Current Detections:**
-                - People In View: **{person_count}**
-                - Crowd Alert Active: **{'🚨 YES' if person_count >= crowd_thresh else '✅ NO'}**
-                """)
+                # Setup layout columns
+                col_feed, col_logs = st.columns([3, 2])
                 
-                # 3. Add any new events
-                for ev in new_events:
-                    events_log.insert(0, ev)
+                with col_feed:
+                    st.markdown("##### Live Feed Monitor")
+                    feed_placeholder = st.empty()
+                    live_stats_placeholder = st.empty()
                     
-                # Render events log list
-                events_html = ""
-                for ev in events_log[:15]:
-                    t_str = datetime.fromisoformat(ev["timestamp"]).strftime("%H:%M:%S")
-                    ev_type = ev["event_type"]
-                    pid = ev["person_id"]
-                    cam = ev["camera_id"]
+                with col_logs:
+                    st.markdown("##### Real-Time Vision Events Log")
+                    events_list_placeholder = st.empty()
                     
-                    if "ALERT" in ev_type:
-                        badge = f"<span style='background-color:#991b1b;color:#fca5a5;padding:2px 8px;border-radius:4px;'>{ev_type}</span>"
-                    else:
-                        badge = f"<span style='background-color:#1e3a8a;color:#93c5fd;padding:2px 8px;border-radius:4px;'>{ev_type}</span>"
-                        
-                    desc = ""
-                    if ev_type == "PERSON_ENTERED":
-                        desc = f"Customer #{pid} walked in"
-                    elif ev_type == "PERSON_EXITED":
-                        desc = f"Customer #{pid} left"
-                    elif ev_type == "LOITERING_ALERT":
-                        desc = f"Customer #{pid} loitered for {ev['details'].get('duration_seconds')}s"
-                    elif ev_type == "CROWD_ALERT":
-                        desc = f"Crowd of {ev['details'].get('count')} customers detected"
-                        
-                    events_html += f"<div style='margin-bottom:8px;'>[{t_str}] {badge} on <b>{cam}</b>: {desc}</div>"
-                    
-                events_list_placeholder.markdown(
-                    f"<div style='background-color:#161026;border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;border:1px solid #3b2c59;'>{events_html}</div>", 
-                    unsafe_allow_html=True
+                # Import backend class inside the block to avoid loading YOLO model globally on app load
+                # which would slow down Streamlit start.
+                from backend.processor import CCTVProcessor
+                
+                processor = CCTVProcessor(
+                    video_path=abs_path,
+                    camera_id=camera_name,
+                    crowd_threshold=crowd_thresh,
+                    loitering_threshold_sec=float(loiter_thresh)
                 )
                 
-                # Small sleep to simulate real-time processing and release thread
-                time.sleep(0.01)
+                # Run generator loop
+                events_log = []
                 
-            st.success("✅ Video processing simulation finished successfully. Database updated.")
+                generator = processor.process_video_generator(frame_skip=frame_skip_input, max_duration_sec=90.0)
+                
+                for frame_bytes, person_count, new_events in generator:
+                    # 1. Update Video Frame
+                    feed_placeholder.image(frame_bytes, use_container_width=True)
+                    
+                    # 2. Update stats
+                    live_stats_placeholder.markdown(f"""
+                    **Current Detections:**
+                    - People In View: **{person_count}**
+                    - Crowd Alert Active: **{'🚨 YES' if person_count >= crowd_thresh else '✅ NO'}**
+                    """)
+                    
+                    # 3. Add any new events
+                    for ev in new_events:
+                        events_log.insert(0, ev)
+                        
+                    # Render events log list
+                    events_html = ""
+                    for ev in events_log[:15]:
+                        t_str = datetime.fromisoformat(ev["timestamp"]).strftime("%H:%M:%S")
+                        ev_type = ev["event_type"]
+                        pid = ev["person_id"]
+                        cam = ev["camera_id"]
+                        
+                        if "ALERT" in ev_type:
+                            badge = f"<span style='background-color:#991b1b;color:#fca5a5;padding:2px 8px;border-radius:4px;'>{ev_type}</span>"
+                        else:
+                            badge = f"<span style='background-color:#1e3a8a;color:#93c5fd;padding:2px 8px;border-radius:4px;'>{ev_type}</span>"
+                            
+                        desc = ""
+                        if ev_type == "PERSON_ENTERED":
+                            desc = f"Customer #{pid} walked in"
+                        elif ev_type == "PERSON_EXITED":
+                            desc = f"Customer #{pid} left"
+                        elif ev_type == "LOITERING_ALERT":
+                            desc = f"Customer #{pid} loitered for {ev['details'].get('duration_seconds')}s"
+                        elif ev_type == "CROWD_ALERT":
+                            desc = f"Crowd of {ev['details'].get('count')} customers detected"
+                            
+                        events_html += f"<div style='margin-bottom:8px;'>[{t_str}] {badge} on <b>{cam}</b>: {desc}</div>"
+                        
+                    events_list_placeholder.markdown(
+                        f"<div style='background-color:#161026;border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;border:1px solid #3b2c59;'>{events_html}</div>", 
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Small sleep to simulate real-time processing and release thread
+                    time.sleep(0.01)
+                    
+                st.success("✅ Video processing simulation finished successfully. Database updated.")
 
 # ----------------- TAB 3: EVENT LOG -----------------
 with tab_logs:
